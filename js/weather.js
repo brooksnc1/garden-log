@@ -25,7 +25,7 @@ export async function fetchWeather(lat, lon, lastKnownDate) {
   }
   const url = 'https://api.open-meteo.com/v1/forecast'
     + `?latitude=${lat.toFixed(3)}&longitude=${lon.toFixed(3)}`
-    + '&daily=precipitation_sum,et0_fao_evapotranspiration,temperature_2m_max,temperature_2m_min'
+    + '&daily=precipitation_sum,et0_fao_evapotranspiration,temperature_2m_max,temperature_2m_min,sunrise,sunset,daylight_duration,sunshine_duration'
     + '&temperature_unit=fahrenheit&timezone=auto'
     + `&past_days=${pastDays}&forecast_days=7`;
   const res = await fetch(url);
@@ -41,6 +41,10 @@ export async function fetchWeather(lat, lon, lastKnownDate) {
     et0Mm: d.et0_fao_evapotranspiration[i],
     tmaxF: d.temperature_2m_max[i],
     tminF: d.temperature_2m_min[i],
+    sunrise: d.sunrise?.[i] ?? null,               // local time, e.g. "2026-09-23T07:28"
+    sunset: d.sunset?.[i] ?? null,
+    daylightH: d.daylight_duration?.[i] != null ? d.daylight_duration[i] / 3600 : undefined,
+    sunshineH: d.sunshine_duration?.[i] != null ? d.sunshine_duration[i] / 3600 : undefined,
     kind: date < today ? 'past' : date === today ? 'today' : 'forecast',
     fetchedAt: now,
   })).filter((r) => r.et0Mm !== null && r.et0Mm !== undefined);

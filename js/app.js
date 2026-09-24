@@ -5,7 +5,7 @@ import { fetchWeather, weatherIsStale, getPosition, localDate } from './weather.
 import { savePhoto, photoURL } from './photos.js';
 
 // Bump together with VERSION in sw.js on every release.
-export const APP_VERSION = '1.0.0';
+export const APP_VERSION = '1.1.1';
 
 const S = {
   containers: [], plantings: [], events: [], seeds: [],
@@ -105,6 +105,22 @@ function gauge(frac, status, size = 52) {
     <line class="mark" x1="6" x2="38" y1="${markY}" y2="${markY}"/>
     <path class="shell" d="${path}"/>
   </svg>`;
+}
+
+function clock(localIso) {
+  // Open-Meteo gives local wall-clock times without a zone; show them as-is.
+  if (!localIso) return '';
+  const [hh, mm] = localIso.slice(11, 16).split(':').map(Number);
+  return new Date(2000, 0, 1, hh, mm).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+}
+function sunText(k) {
+  const t = today();
+  const w = S.weather.get(t);
+  const s = M.sunInfo(k, t, w, S.settings.lat);
+  const h = (x) => `${x.toFixed(1)} h`;
+  let out = s.shade ? `${h(s.sunHours)} of ${h(s.daylight)} daylight (${h(s.shade)} shade)` : `Full sun, ${h(s.daylight)} of daylight`;
+  if (w && typeof w.sunshineH === 'number') out += `. Forecast sunshine after clouds: ${h(Math.min(w.sunshineH, s.sunHours))}`;
+  return out;
 }
 
 function statusLine(st) {
@@ -214,6 +230,7 @@ function viewToday() {
     h += `<div class="note-bar"><p><b>Set your location to use rain and weather.</b></p><p class="small">The watering estimate uses daily rainfall and evaporation for your spot.</p><div class="btn-row"><a class="btn primary small" href="#settings">Set location</a></div></div>`;
   } else if (w) {
     h += `<p class="lede">High ${Math.round(w.tmaxF)}°, low ${Math.round(w.tminF)}°${w.rainMm ? `, ${(w.rainMm / 25.4).toFixed(2)} in rain` : ', no rain'}.`
+      + (w.sunrise ? ` Sunrise ${clock(w.sunrise)}, sunset ${clock(w.sunset)}.` : '')
       + (S.weatherError ? ` <span class="small">Weather not updated: ${esc(S.weatherError)}</span>` : '') + '</p>';
   } else if (S.weatherError) {
     h += `<p class="lede">Weather not updated: ${esc(S.weatherError)}</p>`;
@@ -331,11 +348,11 @@ function viewContainer(id) {
     <dl class="facts">
       <dt>Potting mix</dt><dd>${esc(k.soilGal)} gal, holding about ${st.awc.toFixed(2)} gal usable water</dd>
       <dt>Opening</dt><dd>${esc(k.diameterIn)} in across, so 1 in of rain adds ${(M.openingAreaSqIn(k) / 231).toFixed(2)} gal</dd>
-      <dt>Sun</dt><dd>${k.sunHours === '' || k.sunHours == null ? 'not set (6 h assumed)' : esc(k.sunHours) + ' h a day'}</dd>
+      <dt>Sun today</dt><dd>${sunText(k)}</dd>
       <dt>Using now</dt><dd>about ${st.usingToday.toFixed(2)} gal a day</dd>
       <dt>Tuning</dt><dd>${st.calib === 1 ? 'none yet' : `${st.calib > 1 ? 'dries' : 'holds water'} ${Math.abs(Math.round((st.calib - 1) * 100))}% ${st.calib > 1 ? 'faster' : 'longer'} than the base model`}</dd>
     </dl>
-    <p class="small muted">Rain adds water over the opening; evaporation and plant use come from daily weather, scaled by sun hours and plant size. A watering fills it back up. Soil checks correct the estimate and tune it over time.</p></details>`;
+    <p class="small muted">Rain adds water over the opening; evaporation and plant use come from daily weather (which already accounts for day length and clouds), reduced for any shade and scaled by plant size. A watering fills it back up. Soil checks correct the estimate and tune it over time.</p></details>`;
   return h;
 }
 
@@ -542,7 +559,7 @@ function viewSettings() {
     <p>${S.lastBackupAt ? `Last backup ${relDay(localDate(new Date(S.lastBackupAt)))}.` : 'No backup yet.'}</p>
     <div class="btn-row"><button class="btn primary small" data-act="exportBackup">Save backup file</button>
     ${navigator.canShare ? '<button class="btn small" data-act="shareBackup">Share backup (Drive, email)</button>' : ''}
-    <label class="btn small">Restore from file<input type="file" accept="application/json,.json" data-act="importBackup" hidden></label></div>`;
+    <label class="btn small">Restore from file<input type="file" accept="application/json,.json,text/plain,.txt" data-act="importBackup" hidden></label></div>`;
   h += `<h2>Safety copies</h2><p class="muted small">Made automatically before every data upgrade or restore. The last five are kept.</p><div id="snaps" class="panel"><div class="row muted">Loading\u2026</div></div>`;
   h += `<h2>Storage</h2><div id="storage" class="muted small">Checking\u2026</div>`;
   h += `<h2>About</h2><p class="small muted">Garden Log ${APP_VERSION}, data version ${db.SCHEMA_VERSION}. Weather data by Open-Meteo.com.</p>`;
@@ -636,14 +653,14 @@ const forms = {
   formContainer({ id, preset }) {
     const k = id ? byId(S.containers, id) : null;
     const v = k || (preset === 'bucket'
-      ? { name: live(S.containers).length ? `Bucket ${live(S.containers).length + 1}` : 'Bucket', soilGal: M.BUCKET_PRESET.soilGal, diameterIn: M.BUCKET_PRESET.diameterIn, sunHours: '', fertilizeDays: 14 }
-      : { name: '', soilGal: '', diameterIn: '', sunHours: '', fertilizeDays: 14 });
+      ? { name: live(S.containers).length ? `Bucket ${live(S.containers).length + 1}` : 'Bucket', soilGal: M.BUCKET_PRESET.soilGal, diameterIn: M.BUCKET_PRESET.diameterIn, shadeHours: 0, fertilizeDays: 14 }
+      : { name: '', soilGal: '', diameterIn: '', shadeHours: 0, fertilizeDays: 14 });
     openSheet({
       title: k ? `Edit ${esc(k.name)}` : 'Add container',
       body: field('Name', input('name', v.name, 'required autocomplete="off"'))
         + field('Size', select('preset', [['bucket', '5-gallon bucket'], ['custom', 'Custom']], k ? (k.soilGal == M.BUCKET_PRESET.soilGal && k.diameterIn == M.BUCKET_PRESET.diameterIn ? 'bucket' : 'custom') : (preset === 'bucket' ? 'bucket' : 'custom')))
         + `<div class="pair">${field('Potting mix (gal)', input('soilGal', v.soilGal, 'type="number" step="0.1" min="0.2" required inputmode="decimal"'))}${field('Top opening (in)', input('diameterIn', v.diameterIn, 'type="number" step="0.1" min="2" required inputmode="decimal"'), 'Width across')}</div>`
-        + field('Direct sun (hours a day)', input('sunHours', v.sunHours, 'type="number" step="0.5" min="0" max="16" inputmode="decimal"'), 'On a typical clear day. Blank assumes 6.')
+        + field('Shade (hours a day)', input('shadeHours', v.shadeHours ?? 0, 'type="number" step="0.5" min="0" max="16" inputmode="decimal"'), 'Hours it sits in shade between sunrise and sunset. 0 means full sun all day. Midday shade matters most; count early-morning or late-evening shade at about half.')
         + field('Feed every (days)', input('fertilizeDays', v.fertilizeDays, 'type="number" min="0" inputmode="numeric"'), '0 turns feeding reminders off. Liquid feeds are often every 1 to 2 weeks; follow your product\u2019s label.')
         + field('Notes', `<textarea name="notes">${esc(k?.notes || '')}</textarea>`),
       extra: k ? '<button type="button" class="btn danger" data-del>Delete</button>' : '',
@@ -661,7 +678,7 @@ const forms = {
       async onSubmit(fd) {
         const rec = {
           name: fd.get('name').trim(), soilGal: Number(fd.get('soilGal')), diameterIn: Number(fd.get('diameterIn')),
-          sunHours: fd.get('sunHours') === '' ? '' : Number(fd.get('sunHours')),
+          shadeHours: Number(fd.get('shadeHours')) || 0,
           fertilizeDays: Number(fd.get('fertilizeDays')) || 0, notes: fd.get('notes'),
         };
         if (k) { await db.update('containers', k.id, rec); return 'Saved'; }
@@ -983,27 +1000,62 @@ function openEvent(id) {
 }
 
 // ---------------------------------------------------------------- actions
-async function doBackup(share) {
-  const prevBackup = S.lastBackupAt;
-  await db.setMeta('lastBackupAt', new Date().toISOString()); // included in the file itself
+async function buildBackupFile(ext) {
+  const stamp = new Date().toISOString();
+  const prev = S.lastBackupAt;
+  await db.setMeta('lastBackupAt', stamp); // recorded inside the file too
   const data = await db.exportBackup(APP_VERSION);
-  const name = `garden-backup-${today()}.json`;
-  const file = new File([JSON.stringify(data)], name, { type: 'application/json' });
-  if (share && navigator.canShare && navigator.canShare({ files: [file] })) {
-    try { await navigator.share({ files: [file], title: 'Garden Log backup' }); } catch (e) {
-      await db.setMeta('lastBackupAt', prevBackup);
-      if (e.name === 'AbortError') return;
-      throw e;
-    }
-  } else {
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(file); a.download = name;
-    document.body.append(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
-  }
-  S.lastBackupAt = await db.getMeta('lastBackupAt');
+  await db.setMeta('lastBackupAt', prev); // committed only once the file is actually saved or shared
+  // Chrome only shares certain file types (text, images, PDF, audio, video),
+  // so the shared copy is plain text. The contents are identical JSON either way.
+  const type = ext === 'txt' ? 'text/plain' : 'application/json';
+  return { file: new File([JSON.stringify(data)], `garden-backup-${today()}.${ext}`, { type }), stamp };
+}
+async function markBackedUp(stamp) {
+  await db.setMeta('lastBackupAt', stamp);
+  S.lastBackupAt = stamp;
   render();
-  toast('Backup file created');
+}
+function download(file) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(file); a.download = file.name;
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+}
+async function saveBackup() {
+  const { file, stamp } = await buildBackupFile('json');
+  download(file);
+  await markBackedUp(stamp);
+  toast('Backup saved to Downloads');
+}
+// Two steps: building the file (reading every photo) can take longer than the
+// browser allows between a tap and a share request, so the actual share
+// happens on a second, fresh tap.
+async function shareBackup() {
+  toast('Preparing backup\u2026');
+  const { file, stamp } = await buildBackupFile('txt');
+  const size = file.size < 1048576 ? `${Math.max(1, Math.round(file.size / 1024))} KB` : `${(file.size / 1048576).toFixed(1)} MB`;
+  const shareable = navigator.canShare && navigator.canShare({ files: [file] });
+  openSheet({
+    title: 'Backup ready',
+    body: `<p>${esc(file.name)}, ${size}.</p><p class="muted small">${shareable
+      ? 'Choose Drive, email, or another app on the next screen. To restore it later, pick this file from Settings, Restore from file.'
+      : 'This phone can\u2019t share this file directly, so save it instead. Your Downloads folder can then send it to Drive.'}</p>`,
+    submit: shareable ? 'Share' : 'Save to Downloads',
+    async onSubmit() {
+      if (!shareable) { download(file); await markBackedUp(stamp); return 'Backup saved to Downloads'; }
+      try {
+        await navigator.share({ files: [file], title: 'Garden Log backup' });
+      } catch (e) {
+        if (e.name === 'AbortError') return null; // closed the share screen
+        download(file); // any other refusal: fall back to a normal save
+        await markBackedUp(stamp);
+        return 'Sharing was blocked, so the backup was saved to Downloads instead';
+      }
+      await markBackedUp(stamp);
+      return 'Backup shared';
+    },
+  });
 }
 
 const actions = {
@@ -1027,8 +1079,8 @@ const actions = {
     try { const p = await getPosition(); await saveLocation(p.lat, p.lon); toast('Location saved'); render(); } catch (e) { toast(e.message); }
   },
   refreshWeather: () => refreshWeather(true).then(() => toast(S.weatherError ? 'Weather update failed' : 'Weather updated')),
-  exportBackup: () => doBackup(false).catch((e) => toast(e.message)),
-  shareBackup: () => doBackup(true).catch((e) => toast(e.message)),
+  exportBackup: () => saveBackup().catch((e) => toast(e.message)),
+  shareBackup: () => shareBackup().catch((e) => toast(e.message)),
   async restoreSnap({ id }) {
     if (!confirm('Replace current data with this safety copy? Your current data is saved as a new safety copy first. Photos are not affected.')) return;
     await db.restoreSnapshot(id); await load(); render(); toast('Restored');
@@ -1075,12 +1127,13 @@ function setupSW() {
   if (!('serviceWorker' in navigator)) return;
   const banner = document.getElementById('update');
   navigator.serviceWorker.register('./sw.js').then((reg) => {
-    const show = () => { banner.hidden = false; };
-    if (reg.waiting && navigator.serviceWorker.controller) show();
-    reg.addEventListener('updatefound', () => {
-      const w = reg.installing;
-      w?.addEventListener('statechange', () => { if (w.state === 'installed' && navigator.serviceWorker.controller) show(); });
-    });
+    const show = () => { if (navigator.serviceWorker.controller) banner.hidden = false; };
+    const watch = (w) => w?.addEventListener('statechange', () => { if (w.state === 'installed') show(); });
+    if (reg.waiting) show();
+    watch(reg.installing); // an update may already be downloading
+    reg.addEventListener('updatefound', () => watch(reg.installing));
+    // An installed app can stay open for days; check for updates when it's reopened.
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(() => {}); });
   }).catch(() => {});
   let reloading = false;
   navigator.serviceWorker.addEventListener('controllerchange', () => { if (!reloading) { reloading = true; location.reload(); } });

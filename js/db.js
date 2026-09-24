@@ -12,7 +12,7 @@
 //     first and writes everything back in one transaction: if anything throws,
 //     nothing is written.
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 // ---------------------------------------------------------------------------
 // MIGRATIONS
@@ -31,7 +31,17 @@ export const SCHEMA_VERSION = 1;
 //   },
 // },
 // ---------------------------------------------------------------------------
-export const MIGRATIONS = [];
+export const MIGRATIONS = [
+  {
+    to: 2,
+    describe: 'Containers: sun hours are now calculated from sunrise/sunset; the user enters hours of shade instead',
+    up(data) {
+      // The old sunHours value is left in place (unused) so nothing is lost.
+      data.containers = data.containers.map((c) => (c.shadeHours === undefined ? { ...c, shadeHours: 0 } : c));
+      return data;
+    },
+  },
+];
 
 // Structural IndexedDB versions (new object stores / indexes). Separate from
 // SCHEMA_VERSION: this only changes when a new store is needed.

@@ -7,7 +7,7 @@ import { localDate } from './weather.js';
 
 export const DUE_FRACTION = 0.4;      // water when available water drops below 40%
 const AWC_PER_GAL = 0.22;             // plant-available water per gallon of potting mix
-const BARE_SOIL = 0.35;               // evaporation from an unplanted surface
+const BARE_SOIL = 0.6;                // evaporation from bare, moist potting mix
 const FALLBACK_ET0_MM = 3;            // used if a day of weather is missing
 const FROZEN_MAX_F = 34;              // days this cold: no water use, feeding paused
 const MOISTURE_LEVELS = { dry: 0.15, moist: 0.55, wet: 1.0 };
@@ -38,9 +38,26 @@ export function openingAreaSqIn(c) {
 export function awcGal(c) {
   return (Number(c.soilGal) || BUCKET_PRESET.soilGal) * AWC_PER_GAL;
 }
-function sunFactor(c) {
-  const s = c.sunHours === '' || c.sunHours === null || c.sunHours === undefined ? 6 : Number(c.sunHours);
-  return clamp(0.35 + 0.65 * (s / 8), 0.35, 1.1);
+// Daylight hours from sunrise/sunset. Uses Open-Meteo's value when stored,
+// otherwise the standard astronomical formula (sun center 0.833° below the
+// horizon, accounting for refraction), which agrees within a few minutes.
+export function daylightHours(day, w, lat) {
+  if (w && typeof w.daylightH === 'number') return w.daylightH;
+  const phi = ((lat ?? 40) * Math.PI) / 180;
+  const d = new Date(day + 'T12:00');
+  const n = Math.round((d - new Date(d.getFullYear(), 0, 0)) / 864e5);
+  const decl = (23.44 * Math.PI / 180) * Math.sin((2 * Math.PI * (284 + n)) / 365);
+  const cosW = (Math.sin(-0.833 * Math.PI / 180) - Math.sin(phi) * Math.sin(decl)) / (Math.cos(phi) * Math.cos(decl));
+  return (2 * Math.acos(clamp(cosW, -1, 1)) * 180 / Math.PI) / 15;
+}
+
+// Reference evapotranspiration already reflects day length and clouds for a
+// fully sunlit surface, so an unshaded container gets factor 1. Shade removes
+// direct sun for part of the day; diffuse sky light (~35%) remains.
+export function sunInfo(c, day, w, lat) {
+  const daylight = daylightHours(day, w, lat);
+  const shade = clamp(Number(c.shadeHours) || 0, 0, daylight);
+  return { daylight, shade, sunHours: daylight - shade, factor: 1 - 0.65 * (shade / daylight) };
 }
 
 export function activePlantingsOn(containerId, day, plantings) {
@@ -61,18 +78,18 @@ function canopyFactor(c, day, plantings) {
   return Math.max(BARE_SOIL, Math.min(top + 0.15 * (fs.length - 1), top * 1.3));
 }
 
-function dayFlux(c, day, w, plantings) {
+function dayFlux(c, day, w, plantings, lat) {
   const area = openingAreaSqIn(c);
   const rainIn = (w ? w.rainMm || 0 : 0) / 25.4;
   const et0In = (w ? w.et0Mm : FALLBACK_ET0_MM) / 25.4;
   const frozen = !!(w && w.tmaxF <= FROZEN_MAX_F);
-  const etBase = frozen ? 0 : (et0In * area * canopyFactor(c, day, plantings) * sunFactor(c)) / 231;
+  const etBase = frozen ? 0 : (et0In * area * canopyFactor(c, day, plantings) * sunInfo(c, day, w, lat).factor) / 231;
   return { rainGal: (rainIn * area) / 231, rainIn, etBase, frozen, estimated: !w };
 }
 
 // ---------- water balance ----------
 export function simulate(c, ctx) {
-  const { plantings, events, weather, today, nowFrac } = ctx;
+  const { plantings, events, weather, today, nowFrac, lat } = ctx;
   const awc = awcGal(c);
   const evs = events
     .filter((e) => !e.deletedAt && e.containerId === c.id && (e.type === 'water' || e.type === 'moisture'))
@@ -95,7 +112,7 @@ export function simulate(c, ctx) {
   let estimatedDays = 0;
 
   for (let d = start; d <= today; d = addDays(d, 1)) {
-    const f = dayFlux(c, d, weather.get(d), plantings);
+    const f = dayFlux(c, d, weather.get(d), plantings, lat);
     if (f.estimated) estimatedDays++;
     const end = d === today ? nowFrac : 1;
     let t = 0;
@@ -126,14 +143,14 @@ export function simulate(c, ctx) {
   // Look ahead with forecast data to estimate the next watering.
   let proj = frac;
   let nextDue = frac < DUE_FRACTION ? today : null;
-  const todayFlux = dayFlux(c, today, weather.get(today), plantings);
+  const todayFlux = dayFlux(c, today, weather.get(today), plantings, lat);
   proj = clamp(proj + (todayFlux.rainGal - todayFlux.etBase * calib) * (1 - nowFrac) / awc, 0, 1);
   if (!nextDue && proj < DUE_FRACTION) nextDue = today;
   for (let i = 1; i <= 6 && !nextDue; i++) {
     const d = addDays(today, i);
     const w = weather.get(d);
     if (!w) break;
-    const f = dayFlux(c, d, w, plantings);
+    const f = dayFlux(c, d, w, plantings, lat);
     proj = clamp(proj + (f.rainGal - f.etBase * calib) / awc, 0, 1);
     if (proj < DUE_FRACTION) nextDue = d;
   }

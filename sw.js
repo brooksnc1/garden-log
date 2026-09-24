@@ -1,6 +1,6 @@
 // Bump VERSION (and APP_VERSION in js/app.js) on every release so phones
 // download the new files. Data is never stored here; it lives in IndexedDB.
-const VERSION = '1.0.0';
+const VERSION = '1.1.1';
 const SHELL = `shell-${VERSION}`;
 const FONTS = 'fonts';
 const FILES = [
@@ -10,7 +10,9 @@ const FILES = [
 ];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(SHELL).then((c) => c.addAll(FILES)));
+  // cache: 'reload' bypasses the browser's HTTP cache, so a new version never
+  // gets packaged with stale copies of the old files.
+  e.waitUntil(caches.open(SHELL).then((c) => c.addAll(FILES.map((f) => new Request(f, { cache: 'reload' })))));
 });
 
 self.addEventListener('activate', (e) => {

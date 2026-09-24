@@ -25,7 +25,7 @@ no server, and your data stays on your phone.
 First run:
 - **Settings → Use my location** (or enter coordinates). This is used only to
   request weather from Open-Meteo.
-- **Add a 5-gallon bucket**, then set its hours of direct sun.
+- **Add a 5-gallon bucket**. Set hours of shade only if something shades it (0 = full sun).
 - **Add planting** for each crop. Enter packet numbers under *Numbers from the
   seed packet*, or add the packet under **Seeds** first and use
   *Sow from this packet*.
@@ -36,7 +36,9 @@ First run:
   Chrome has marked it **protected** from automatic cleanup; installing the app to
   the home screen normally grants this.
 - **Settings → Save backup file** (or *Share backup* to Google Drive) writes one
-  JSON file with everything, photos included. The app reminds you every 30 days.
+  file with everything, photos included. Shared backups end in `.txt` because
+  Chrome only shares certain file types; the contents are the same, and
+  *Restore from file* accepts either. The app reminds you every 30 days.
 - **Restore from file** replaces the app's data with a backup. Your current data
   is saved as a safety copy first.
 - Uninstalling the app or clearing Chrome's site data deletes everything that
@@ -50,8 +52,10 @@ Each container tracks *usable water*: roughly 22% of the potting-mix volume
 - **Rain in:** rain depth × the container's opening area. One inch on a
   12-inch bucket adds about half a gallon; the rest runs off or drains.
 - **Water out:** daily reference evapotranspiration from Open-Meteo, scaled by
-  your sun hours and by how big the plants are (grows from seedling to mature
-  over each crop's days-to-maturity).
+  how big the plants are (grows from seedling to mature over each crop's
+  days-to-maturity). That figure already reflects day length (sunrise to
+  sunset) and cloud cover. Shade reduces it: sun hours = daylight − shade, and
+  shaded hours still get about 35% from sky light.
 - **Watering** fills it back up (or adds a set amount if you enter gallons).
 - **Due** when usable water drops below 40%. If ≥0.2 in of rain is forecast
   tomorrow, the reminder says it can probably wait.
@@ -87,7 +91,8 @@ To release a change:
    append a migration to `MIGRATIONS`. Never edit one that has shipped. There
    is a commented example in the file. If you need a new IndexedDB object
    store, bump `IDB_VERSION` and add an entry to `IDB_UPGRADES`.
-3. Bump `APP_VERSION` in `js/app.js` and `VERSION` in `sw.js` to the same number.
+3. Bump `APP_VERSION` in `js/app.js` and `VERSION` in `sw.js` to the same number,
+   and add an entry to `CHANGELOG.md` (what changed, and what any data upgrade does).
    If you add a new file, add it to the `FILES` list in `sw.js`.
 4. Commit to GitHub. Next time the app opens online, it shows **A new version is
    ready → Update now**.
@@ -106,5 +111,6 @@ Adding a crop to `js/crops.js` needs no migration.
 | `js/weather.js` | Open-Meteo requests with gap backfill (up to 92 days) |
 | `js/photos.js` | Photo compression (~1600 px JPEG) and thumbnails |
 | `sw.js`, `manifest.webmanifest`, `icons/` | Offline support and home-screen install |
+| `CHANGELOG.md` | Release history |
 
 Weather data by [Open-Meteo.com](https://open-meteo.com) (CC BY 4.0).
