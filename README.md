@@ -44,6 +44,15 @@ First run:
 - Uninstalling the app or clearing Chrome's site data deletes everything that
   isn't in a backup file.
 
+## Frost alerts
+
+The Today screen shows frost for the next two nights: **light frost** (low of
+29–35°F) and **hard frost** (28°F or below), with the crops at risk in each
+container. To get phone notifications, open **Settings → Frost alerts**, pick
+*Light and hard frost* or *Hard frost only*, and allow notifications. The app
+must be installed to the home screen; Chrome then checks in the background
+about once a day while the phone has a connection.
+
 ## How the watering estimate works
 
 Each container tracks *usable water*: roughly 22% of the potting-mix volume
@@ -62,8 +71,8 @@ Each container tracks *usable water*: roughly 22% of the potting-mix volume
 - **Frozen days** (high ≤34°F) use no water, and feeding reminders pause after
   a cold week.
 - **Soil checks** (dry / moist / wet) correct the estimate on the spot. When a
-  check disagrees strongly with the model, the container's drying rate is
-  nudged 15% toward what you observed. The container's page shows the current
+  check comes at least 12 hours after a full watering, the app compares the
+  real drying with the model's and sets the container's drying rate from it. The container's page shows the current
   tuning under *How the water estimate works here*.
 
 Everything is recomputed from your logged history each time, so model
@@ -107,7 +116,8 @@ Adding a crop to `js/crops.js` needs no migration.
 | `js/app.js` | Screens, forms and actions |
 | `js/db.js` | Storage, migrations, safety copies, backup files |
 | `js/model.js` | Water balance, timing windows, due list, alerts (read-only logic) |
-| `js/crops.js` | Default crop timings and sizes; packet values override these |
+| `js/crops-data.js`, `js/crops.js` | Default crop timings, sizes and cold limits; packet values override these |
+| `js/frost.js` | Frost levels and alert text, shared with the background check in `sw.js` |
 | `js/weather.js` | Open-Meteo requests with gap backfill (up to 92 days) |
 | `js/photos.js` | Photo compression (~1600 px JPEG) and thumbnails |
 | `sw.js`, `manifest.webmanifest`, `icons/` | Offline support and home-screen install |

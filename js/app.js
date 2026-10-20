@@ -3,9 +3,12 @@ import { CROPS, UNITS, METHODS, crop, timingFor } from './crops.js';
 import * as M from './model.js';
 import { fetchWeather, weatherIsStale, getPosition, localDate } from './weather.js';
 import { savePhoto, photoURL } from './photos.js';
+import './frost.js';
+
+const Frost = globalThis.GardenFrost;
 
 // Bump together with VERSION in sw.js on every release.
-export const APP_VERSION = '1.1.1';
+export const APP_VERSION = '1.2.0';
 
 const S = {
   containers: [], plantings: [], events: [], seeds: [],
@@ -83,6 +86,7 @@ async function refreshWeather(force = false) {
     const dates = [...S.weather.keys()].filter((d) => S.weather.get(d).kind === 'past').sort();
     await fetchWeather(lat, lon, dates[dates.length - 1]);
     S.weatherError = null;
+    if (document.visibilityState === 'visible') markFrostSeen();
   } catch (e) {
     S.weatherError = e.message;
   }
@@ -121,6 +125,54 @@ function sunText(k) {
   let out = s.shade ? `${h(s.sunHours)} of ${h(s.daylight)} daylight (${h(s.shade)} shade)` : `Full sun, ${h(s.daylight)} of daylight`;
   if (w && typeof w.sunshineH === 'number') out += `. Forecast sunshine after clouds: ${h(Math.min(w.sunshineH, s.sunHours))}`;
   return out;
+}
+
+// ---------------------------------------------------------------- frost
+function frostOutlook() {
+  return Frost.outlook({ weatherByDate: S.weather, containers: live(S.containers), plantings: live(S.plantings) });
+}
+const frostSetting = () => S.settings.frostNotify || 'off';
+
+// Seen in the app counts as announced, so the background check won't repeat it.
+async function markFrostSeen() {
+  const setting = frostSetting();
+  if (setting === 'off') return;
+  const sent = (await db.getMeta('frostNotified')) || {};
+  let changed = false;
+  for (const ev of frostOutlook()) {
+    if (Frost.wanted(ev, setting) && !sent[Frost.key(ev)]) { sent[Frost.key(ev)] = new Date().toISOString(); changed = true; }
+  }
+  if (changed) await db.setMeta('frostNotified', sent);
+}
+
+async function frostBackgroundStatus() {
+  const out = { permission: 'Notification' in window ? Notification.permission : 'unsupported', periodic: 'unsupported' };
+  try {
+    const reg = await navigator.serviceWorker?.ready;
+    if (reg && 'periodicSync' in reg) {
+      const p = await navigator.permissions.query({ name: 'periodic-background-sync' });
+      const tags = await reg.periodicSync.getTags();
+      out.periodic = tags.includes('frost-check') ? 'on' : p.state === 'granted' ? 'off' : 'denied';
+    }
+  } catch { /* leave as unsupported */ }
+  return out;
+}
+
+async function applyFrostSetting() {
+  const reg = await navigator.serviceWorker?.ready;
+  const want = frostSetting() !== 'off';
+  if (!reg || !('periodicSync' in reg)) return;
+  try {
+    if (want) await reg.periodicSync.register('frost-check', { minInterval: 6 * 3600e3 });
+    else await reg.periodicSync.unregister('frost-check');
+  } catch { /* not installed, or Chrome declined; status shows it */ }
+}
+
+function tuningText(st) {
+  if (!st.lastCalib) return 'None yet. A soil check a day or more after a full watering sets it.';
+  const f = st.calib;
+  const how = f >= 1.05 ? `dries ${f.toFixed(1)}\u00d7 as fast as the base model` : f <= 0.95 ? `dries at ${Math.round(f * 100)}% of the base model\u2019s rate` : 'matches the base model';
+  return `${how[0].toUpperCase() + how.slice(1)}, from your soil check on ${fmtShort(localDate(new Date(st.lastCalib.at)))}`;
 }
 
 function statusLine(st) {
@@ -236,10 +288,12 @@ function viewToday() {
     h += `<p class="lede">Weather not updated: ${esc(S.weatherError)}</p>`;
   }
 
+  for (const ev of frostOutlook()) {
+    const { title, body } = Frost.describe(ev);
+    h += `<div class="alert ${ev.anyRisk ? '' : 'calm'}"><span class="dot ${ev.anyRisk ? 'dot-alert' : 'dot-info'}"></span><div><strong>${esc(title)}.</strong> ${esc(body)}</div></div>`;
+  }
   for (const a of M.weatherAlerts(c)) {
-    h += a.kind === 'cold'
-      ? `<div class="alert"><span class="dot alert"></span><div><strong>Cold ${relDay(a.date)}: low of ${a.temp}°F.</strong> ${esc(a.crop)} in ${esc(a.container)} could be damaged. Move it somewhere sheltered or cover it overnight.</div></div>`
-      : `<div class="alert"><span class="dot alert"></span><div><strong>Hot ${relDay(a.date)}: high of ${a.temp}°F.</strong> ${esc(a.container)} may need water twice that day. Afternoon shade helps.</div></div>`;
+    h += `<div class="alert"><span class="dot dot-alert"></span><div><strong>Hot ${relDay(a.date)}: high of ${a.temp}°F.</strong> ${esc(a.container)} may need water twice that day. Afternoon shade helps.</div></div>`;
   }
 
   if (!containers.length) {
@@ -257,7 +311,7 @@ function viewToday() {
   const items = dueItems(c);
   h += '<h2>Due</h2>';
   h += items.length
-    ? `<div class="panel due">${items.map((i) => `<div class="row"><span class="dot ${i.tone}"></span><div class="grow"><div class="title">${i.link ? `<a ${i.link} class="plain">${i.title}</a>` : i.title}</div><div class="sub">${i.detail}</div></div><div class="end">${i.action || ''}</div></div>`).join('')}</div>`
+    ? `<div class="panel due">${items.map((i) => `<div class="row"><span class="dot dot-${i.tone}"></span><div class="grow"><div class="title">${i.link ? `<a ${i.link} class="plain">${i.title}</a>` : i.title}</div><div class="sub">${i.detail}</div></div><div class="end">${i.action || ''}</div></div>`).join('')}</div>`
     : '<div class="empty"><p>Nothing due today.</p><p class="muted">Log a watering or a note any time from the buttons above.</p></div>';
 
   h += '<h2>Containers</h2><div class="panel">';
@@ -350,7 +404,7 @@ function viewContainer(id) {
       <dt>Opening</dt><dd>${esc(k.diameterIn)} in across, so 1 in of rain adds ${(M.openingAreaSqIn(k) / 231).toFixed(2)} gal</dd>
       <dt>Sun today</dt><dd>${sunText(k)}</dd>
       <dt>Using now</dt><dd>about ${st.usingToday.toFixed(2)} gal a day</dd>
-      <dt>Tuning</dt><dd>${st.calib === 1 ? 'none yet' : `${st.calib > 1 ? 'dries' : 'holds water'} ${Math.abs(Math.round((st.calib - 1) * 100))}% ${st.calib > 1 ? 'faster' : 'longer'} than the base model`}</dd>
+      <dt>Tuning</dt><dd>${tuningText(st)}</dd>
     </dl>
     <p class="small muted">Rain adds water over the opening; evaporation and plant use come from daily weather (which already accounts for day length and clouds), reduced for any shade and scaled by plant size. A watering fills it back up. Soil checks correct the estimate and tune it over time.</p></details>`;
   return h;
@@ -555,6 +609,9 @@ function viewSettings() {
     <div class="btn-row"><button class="btn primary small" data-act="useLocation">Use my location</button><button class="btn small" data-act="formLocation">Enter coordinates</button>
     ${st.lat != null ? '<button class="btn small" data-act="refreshWeather">Refresh weather</button>' : ''}</div>
     <p class="small muted">${S.weatherFetchedAt ? `Weather updated ${relDay(localDate(new Date(S.weatherFetchedAt)))} at ${fmtTime(S.weatherFetchedAt)}.` : ''} ${S.weatherError ? esc(S.weatherError) : ''}</p>`;
+  h += `<h2>Frost alerts</h2><p class="muted small">Light frost: overnight low of ${Frost.HARD_MAX + 1} to ${Frost.LIGHT_MAX}°F. Hard frost: ${Frost.HARD_MAX}°F or below. Alerts say which of your crops are at risk.</p>
+    <label class="field"><span>Notify me about</span>${select('frostNotify', [['all', 'Light and hard frost'], ['hard', 'Hard frost only'], ['off', 'Off (Today screen only)']], frostSetting(), 'data-act="frostSetting"')}</label>
+    <div id="frost-status" class="small muted">Checking\u2026</div>`;
   h += `<h2>Backup</h2><p class="muted small">Your data lives only on this phone. A backup file includes everything, photos too.</p>
     <p>${S.lastBackupAt ? `Last backup ${relDay(localDate(new Date(S.lastBackupAt)))}.` : 'No backup yet.'}</p>
     <div class="btn-row"><button class="btn primary small" data-act="exportBackup">Save backup file</button>
@@ -566,7 +623,23 @@ function viewSettings() {
   queueMicrotask(fillSettingsAsync);
   return h;
 }
+async function fillFrostStatus() {
+  const el = document.getElementById('frost-status');
+  if (!el) return;
+  if (frostSetting() === 'off') { el.innerHTML = '<p>Frost warnings still show on the Today screen.</p>'; return; }
+  const st = await frostBackgroundStatus();
+  const lines = [];
+  if (st.permission === 'denied') lines.push('<p><b>Notifications are blocked for this app.</b> Turn them on in Android Settings, Apps, Chrome (or Garden Log), Notifications.</p>');
+  else if (st.permission !== 'granted') lines.push('<p>Notifications aren\u2019t allowed yet.</p><div class="btn-row"><button class="btn small primary" data-act="allowNotify">Allow notifications</button></div>');
+  if (st.periodic === 'on') lines.push('<p>Background checks are on. Chrome runs them about once a day while the phone has a connection; it decides the exact times.</p>');
+  else if (st.periodic === 'unsupported') lines.push('<p>This browser can\u2019t check in the background. You\u2019ll get alerts when you open the app.</p>');
+  else lines.push('<p>Background checks aren\u2019t on yet. They need the app installed to the home screen (Chrome menu, Add to Home screen), opened from there.</p>');
+  if (st.permission === 'granted') lines.push('<div class="btn-row"><button class="btn small" data-act="testNotify">Send a test alert</button></div>');
+  el.innerHTML = lines.join('');
+}
+
 async function fillSettingsAsync() {
+  fillFrostStatus();
   const snaps = await db.listSnapshots();
   const el = document.getElementById('snaps');
   if (el) {
@@ -772,7 +845,17 @@ const forms = {
           timing: timingFrom(fd), notes: fd.get('notes'),
         };
         if (photos[0]) rec.photoId = photos[0];
-        if (s) { await db.update('seeds', s.id, rec); return 'Saved'; }
+        if (s) {
+          await db.update('seeds', s.id, rec);
+          const keys = ['germMin', 'germMax', 'dtmMin', 'dtmMax', 'spacing'];
+          const changed = keys.some((k2) => (s.timing?.[k2] ?? null) !== (rec.timing[k2] ?? null));
+          const linked = live(S.plantings).filter((p) => p.seedId === s.id && (p.status || 'active') === 'active');
+          if (changed && linked.length && confirm(`Apply the new packet numbers to ${linked.length === 1 ? 'the planting' : `the ${linked.length} plantings`} sown from this packet?`)) {
+            for (const p of linked) await db.update('plantings', p.id, { timing: { ...(p.timing || {}), ...rec.timing } });
+            return `Saved and updated ${linked.length} planting${linked.length > 1 ? 's' : ''}`;
+          }
+          return 'Saved';
+        }
         const n = await db.create('seeds', rec);
         location.hash = `#seed/${n.id}`;
         return 'Packet added';
@@ -832,7 +915,7 @@ const forms = {
   formMoisture({ id }) {
     openSheet({
       title: 'Soil check',
-      body: '<p class="muted small">Push a finger about an inch into the mix, or lift the bucket.</p>'
+      body: '<p class="muted small">Push a finger about an inch into the mix, or lift the bucket. A dry surface alone doesn\u2019t count. A check a day or two after a full watering also tunes how fast this container dries.</p>'
         + `<div class="field choices">
           <label><input type="radio" name="level" value="dry" required><span><b>Dry</b><br><span class="small muted">Dry an inch down, bucket feels light</span></span></label>
           <label><input type="radio" name="level" value="moist"><span><b>Moist</b><br><span class="small muted">Cool and damp, not soggy</span></span></label>
@@ -840,8 +923,12 @@ const forms = {
         + whenField(),
       submit: 'Save check',
       async onSubmit(fd) {
-        await addEvent('moisture', { containerId: id, at: atFrom(fd), data: { level: fd.get('level') } });
-        return 'Estimate updated';
+        const k = byId(S.containers, id);
+        const before = M.simulate(k, ctx()).calib;
+        const e = await addEvent('moisture', { containerId: id, at: atFrom(fd), data: { level: fd.get('level') } });
+        const after = M.simulate(k, { ...ctx(), events: [...live(S.events), e] }).calib;
+        if (Math.abs(after - before) < 0.05) return 'Estimate updated';
+        return `Drying rate tuned: now ${after.toFixed(1)}\u00d7 the base model`;
       },
     });
   },
@@ -1085,6 +1172,18 @@ const actions = {
     if (!confirm('Replace current data with this safety copy? Your current data is saved as a new safety copy first. Photos are not affected.')) return;
     await db.restoreSnapshot(id); await load(); render(); toast('Restored');
   },
+  async allowNotify() {
+    const r = await Notification.requestPermission();
+    if (r === 'granted') { await applyFrostSetting(); toast('Notifications allowed'); } else toast('Notifications not allowed');
+    fillFrostStatus();
+  },
+  async testNotify() {
+    const reg = await navigator.serviceWorker.ready;
+    await reg.showNotification('Hard frost tonight: low 26°F (test)', {
+      body: 'This is how frost alerts will look. Tap to open Garden Log.', tag: 'frost-test',
+      icon: './icons/icon-192.png', badge: './icons/icon-192.png',
+    });
+  },
   async persist() {
     const ok = navigator.storage?.persist ? await navigator.storage.persist() : false;
     toast(ok ? 'Storage protected' : 'The browser declined. Install the app to your home screen and try again.');
@@ -1104,6 +1203,14 @@ document.addEventListener('click', (ev) => {
 document.addEventListener('change', async (ev) => {
   const el = ev.target;
   if (el.dataset.act === 'year') location.hash = `#season/${el.value}`;
+  if (el.dataset.act === 'frostSetting') {
+    S.settings = { ...S.settings, frostNotify: el.value };
+    await db.setMeta('settings', S.settings);
+    if (el.value !== 'off' && 'Notification' in window && Notification.permission === 'default') await Notification.requestPermission();
+    await applyFrostSetting();
+    if (el.value !== 'off') await markFrostSeen(); // what's on screen now is already known
+    fillFrostStatus();
+  }
   if (el.dataset.act === 'importBackup' && el.files[0]) {
     try {
       const obj = JSON.parse(await el.files[0].text());
@@ -1151,6 +1258,8 @@ function setupSW() {
   await load();
   render();
   setupSW();
+  applyFrostSetting();
+  markFrostSeen();
   if (navigator.storage?.persist) navigator.storage.persisted().then((p) => { if (!p) navigator.storage.persist(); });
   refreshWeather();
 })();

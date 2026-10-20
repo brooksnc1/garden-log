@@ -5,6 +5,41 @@ in `js/app.js` and `VERSION` in `sw.js`. "Data version" is `SCHEMA_VERSION`
 in `js/db.js`; when it changes, the entry says what the upgrade does to
 existing data.
 
+## 1.2.0 — 2026-10-18
+
+Data version 2 (unchanged; no data upgrade). New optional setting
+`frostNotify` is stored in the existing settings record and defaults to off.
+
+### Added
+- **Frost alerts, light vs. hard.** Light frost: overnight low of 29–35°F.
+  Hard frost: 28°F or below. Each alert names which crops are at risk (with a
+  3°F allowance because pots get colder than the ground) and which are fine.
+  Shown on the Today screen for the next two nights.
+- **Frost notifications.** Settings, Frost alerts: light and hard, hard only, or
+  off. When the app is installed to the home screen, Chrome checks the
+  forecast in the background (about once a day, at times Chrome chooses) and
+  sends a phone notification. Each frost night is announced once; a light
+  frost that worsens to hard is announced again. Includes a test alert button.
+- Editing a seed packet's numbers offers to apply them to the active
+  plantings sown from that packet.
+
+### Changed
+- **Soil checks tune the drying rate in one step.** A check at least 12 hours
+  after a full watering (or an earlier check) compares how much the bucket
+  actually dried with what the model predicted, and sets the container's
+  drying rate from that (limits 0.4× to 4×). Previously each check nudged it
+  by only 15%, capped at 2×.
+- Soil-check answers are treated as ranges (dry, moist, wet) rather than single
+  values, so a normal "moist" answer no longer skews the estimate.
+- The container page shows the tuning as a multiple of the base model and the
+  date of the check that set it.
+- The old single "Cold" alert is replaced by the frost alerts.
+
+### Fixed
+- Status dots on the Today screen were drawn as large ovals for growth items
+  (sprouting, thinning) and weather alerts, because their style names
+  collided with other page styles.
+
 ## 1.1.1 — 2026-09-23
 
 Data version 2 (unchanged; no data upgrade).

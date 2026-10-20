@@ -10,7 +10,11 @@ const AWC_PER_GAL = 0.22;             // plant-available water per gallon of pot
 const BARE_SOIL = 0.6;                // evaporation from bare, moist potting mix
 const FALLBACK_ET0_MM = 3;            // used if a day of weather is missing
 const FROZEN_MAX_F = 34;              // days this cold: no water use, feeding paused
-const MOISTURE_LEVELS = { dry: 0.15, moist: 0.55, wet: 1.0 };
+// What each soil-check answer means, as a range of usable water. A check only
+// moves the estimate to the nearest edge of its range, so a coarse answer
+// never overstates what it tells us.
+const MOISTURE_BANDS = { dry: [0, 0.3], moist: [0.35, 0.95], wet: [0.9, 1] };
+const CALIB_MIN = 0.4, CALIB_MAX = 4;   // limits on how much soil checks can tune drying
 
 export const BUCKET_PRESET = { soilGal: 4.5, diameterIn: 11.9, sizeLabel: '5-gallon bucket' };
 
@@ -110,6 +114,11 @@ export function simulate(c, ctx) {
   let calib = 1;
   const series = [];
   let estimatedDays = 0;
+  // Calibration bookkeeping since the last known level (a full watering, a
+  // soil check, or rain that filled the bucket): starting level, rain added,
+  // and the uncalibrated model's drying, all as fractions of usable water.
+  let ref = null; // { level, rain, dry, at }
+  let lastCalib = null;
 
   for (let d = start; d <= today; d = addDays(d, 1)) {
     const f = dayFlux(c, d, weather.get(d), plantings, lat);
@@ -117,7 +126,15 @@ export function simulate(c, ctx) {
     const end = d === today ? nowFrac : 1;
     let t = 0;
     const step = (p) => {
-      if (p > 0) frac = clamp(frac + (f.rainGal * p - f.etBase * calib * p) / awc, 0, 1);
+      if (p <= 0) return;
+      const rain = (f.rainGal * p) / awc;
+      const dry = (f.etBase * p) / awc;
+      const raw = frac + rain - dry * calib;
+      frac = clamp(raw, 0, 1);
+      if (ref) {
+        if (raw >= 1) ref = { level: 1, rain: 0, dry: 0, at: ref.at }; // rain filled it: fresh start
+        else { ref.rain += rain; ref.dry += dry; }
+      }
     };
     for (const e of evs) {
       if (e.day !== d) continue;
@@ -127,11 +144,22 @@ export function simulate(c, ctx) {
       if (e.type === 'water') {
         const amt = Number(e.data?.amountGal);
         frac = amt > 0 ? Math.min(1, frac + amt / awc) : 1;
+        if (frac >= 1) ref = { level: 1, rain: 0, dry: 0, at: e.at };
+        else if (ref) ref.level = Math.min(1, ref.level + amt / awc); // partial watering adds to the account
       } else if (e.type === 'moisture') {
-        const obs = MOISTURE_LEVELS[e.data?.level];
-        if (obs !== undefined) {
-          if (obs < frac - 0.25) calib = Math.min(2, calib * 1.15);
-          else if (obs > frac + 0.25) calib = Math.max(0.5, calib / 1.15);
+        const band = MOISTURE_BANDS[e.data?.level];
+        if (band) {
+          const obs = clamp(frac, band[0], band[1]);
+          // Measure this bucket's real drying rate since the last known level.
+          // Needs at least half a day and enough modeled drying to compare.
+          const hours = ref ? (new Date(e.at) - new Date(ref.at)) / 36e5 : 0;
+          if (ref && hours >= 12 && ref.dry >= 0.02 && Math.abs(obs - frac) > 0.03) {
+            const lost = ref.level + ref.rain - obs;
+            const k = clamp(lost / ref.dry, CALIB_MIN, CALIB_MAX);
+            calib = clamp(0.3 * calib + 0.7 * k, CALIB_MIN, CALIB_MAX);
+            lastCalib = { at: e.at, hours, factor: calib };
+          }
+          ref = { level: obs, rain: 0, dry: 0, at: e.at };
           frac = obs;
         }
       }
@@ -158,7 +186,7 @@ export function simulate(c, ctx) {
   const lastWater = [...evs].reverse().find((e) => e.type === 'water') || null;
   const tomorrow = weather.get(addDays(today, 1));
   return {
-    frac, calib, series, nextDue, lastWater, estimatedDays, awc,
+    frac, calib, lastCalib, series, nextDue, lastWater, estimatedDays, awc,
     usingToday: todayFlux.etBase * calib,
     frozenToday: todayFlux.frozen,
     rainTomorrowIn: tomorrow && tomorrow.kind === 'forecast' ? (tomorrow.rainMm || 0) / 25.4 : 0,
@@ -246,19 +274,7 @@ export function weatherAlerts(ctx) {
     if (c.deletedAt) continue;
     const act = activePlantingsOn(c.id, ctx.today, ctx.plantings);
     if (!act.length) continue;
-    // Most cold-sensitive crop in the container; +3°F because pot roots
-    // aren't insulated by ground.
-    const tender = act.reduce((best, p) => (crop(p.crop).minTempF > crop(best.crop).minTempF ? p : best));
-    const limit = crop(tender.crop).minTempF + 3;
-    for (let i = 0; i <= 3; i++) {
-      const d = addDays(ctx.today, i);
-      const w = ctx.weather.get(d);
-      if (!w) continue;
-      if (w.tminF <= limit) {
-        out.push({ kind: 'cold', containerId: c.id, date: d, temp: Math.round(w.tminF), crop: crop(tender.crop).name, container: c.name });
-        break;
-      }
-    }
+    // Cold and frost come from frost.js (shared with background notifications).
     for (let i = 0; i <= 3; i++) {
       const d = addDays(ctx.today, i);
       const w = ctx.weather.get(d);

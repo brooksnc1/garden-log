@@ -130,12 +130,12 @@ button.row { width: 100%; background: none; border: 0; text-align: left; font: i
 /* due list */
 .due .row { align-items: flex-start; }
 .dot { flex: none; width: 10px; height: 10px; border-radius: 50%; margin-top: 8px; }
-.dot.water { background: var(--water); }
-.dot.feed { background: var(--soil); }
-.dot.grow { background: var(--leaf); }
-.dot.harvest { background: var(--chard); }
-.dot.alert { background: var(--chard); box-shadow: 0 0 0 3px var(--chard-soft); }
-.dot.info { background: var(--line); }
+.dot-water { background: var(--water); }
+.dot-feed { background: var(--soil); }
+.dot-grow { background: var(--leaf); }
+.dot-harvest { background: var(--chard); }
+.dot-alert { background: var(--chard); box-shadow: 0 0 0 3px var(--chard-soft); }
+.dot-info { background: var(--line); }
 
 .alert {
   display: flex; gap: 12px; align-items: flex-start;
@@ -143,6 +143,8 @@ button.row { width: 100%; background: none; border: 0; text-align: left; font: i
   border-radius: var(--radius); padding: 14px 16px; margin-top: 10px;
 }
 .alert strong { color: var(--chard); }
+.alert.calm { background: var(--water-soft); }
+.alert.calm strong { color: var(--water); }
 .note-bar { background: var(--water-soft); border-radius: var(--radius); padding: 14px 16px; margin-top: 12px; }
 
 /* bucket gauge */
